@@ -3,7 +3,6 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
@@ -18,9 +17,7 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
         uint256 totalStorage; // in bytes
         uint256 usedStorage;
         uint256 reputation; // 0-1000 scale
-        uint256 pricePerGB; // in wei per GB per day
         bool isActive;
-        uint256 stakedAmount;
         uint256 joinedTimestamp;
         string nodeId; // IPFS node ID
         string region;
@@ -49,96 +46,61 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
         address provider;
         address client;
         uint256 duration; // in days
-        uint256 pricePerDay;
         uint256 startTime;
         uint256 endTime;
         bool isActive;
-        uint256 collateral;
         uint256 lastProofTime;
-    }
-
-    // Incentive pool structure
-    struct IncentivePool {
-        uint256 totalRewards;
-        uint256 distributedRewards;
-        uint256 rewardRate; // rewards per successful proof
-        uint256 penaltyRate; // penalty for failed proofs
     }
 
     // State variables
     mapping(address => StorageProvider) public storageProviders;
     mapping(string => FileMetadata) public fileMetadata;
     mapping(bytes32 => StorageContract) public storageContracts;
-    mapping(address => uint256) public userBalances;
-    mapping(address => uint256) public providerEarnings;
     
     address[] public activeProviders;
     string[] public allFiles;
-    IncentivePool public incentivePool;
     
-    IERC20 public storageToken; // ERC20 token for payments
-    uint256 public constant MIN_STAKE = 1000 * 10**18; // 1000 tokens
     uint256 public constant PROOF_INTERVAL = 1 days;
     uint256 public constant MAX_REPUTATION = 1000;
     
     // Events
-    event ProviderRegistered(address indexed provider, string nodeId, uint256 stakedAmount);
+    event ProviderRegistered(address indexed provider, string nodeId);
     event FileUploaded(string indexed fileId, address indexed owner, uint256 fileSize);
     event StorageContractCreated(bytes32 indexed contractId, string fileId, address provider, address client);
     event ProofOfStorageSubmitted(bytes32 indexed contractId, address provider, bool success);
-    event RewardDistributed(address indexed provider, uint256 amount);
-    event PenaltyApplied(address indexed provider, uint256 amount);
     event FileAccessed(string indexed fileId, address indexed user);
-    event ProviderSlashed(address indexed provider, uint256 amount, string reason);
 
-    constructor(address _storageToken) Ownable(msg.sender) {
-        storageToken = IERC20(_storageToken);
-        incentivePool = IncentivePool({
-            totalRewards: 0,
-            distributedRewards: 0,
-            rewardRate: 10 * 10**18, // 10 tokens per proof
-            penaltyRate: 50 * 10**18  // 50 tokens penalty
-        });
+    constructor() Ownable(msg.sender) {
+        // Initialize contract without token dependencies
     }
 
     /**
      * @dev Register as a storage provider
      * @param _totalStorage Total storage capacity in bytes
-     * @param _pricePerGB Price per GB per day in wei
      * @param _nodeId IPFS node identifier
      * @param _region Geographic region
      */
     function registerProvider(
         uint256 _totalStorage,
-        uint256 _pricePerGB,
         string memory _nodeId,
         string memory _region
     ) external {
         require(_totalStorage > 0, "Storage capacity must be greater than 0");
-        require(_pricePerGB > 0, "Price must be greater than 0");
         require(!storageProviders[msg.sender].isActive, "Provider already registered");
-        
-        // Stake tokens
-        require(
-            storageToken.transferFrom(msg.sender, address(this), MIN_STAKE),
-            "Failed to stake tokens"
-        );
 
         storageProviders[msg.sender] = StorageProvider({
             providerAddress: msg.sender,
             totalStorage: _totalStorage,
             usedStorage: 0,
             reputation: 500, // Start with medium reputation
-            pricePerGB: _pricePerGB,
             isActive: true,
-            stakedAmount: MIN_STAKE,
             joinedTimestamp: block.timestamp,
             nodeId: _nodeId,
             region: _region
         });
 
         activeProviders.push(msg.sender);
-        emit ProviderRegistered(msg.sender, _nodeId, MIN_STAKE);
+        emit ProviderRegistered(msg.sender, _nodeId);
     }
 
     /**
@@ -200,18 +162,15 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
             
             bytes32 contractId = keccak256(abi.encodePacked(_fileId, provider, block.timestamp));
             uint256 duration = 365; // 1 year default
-            uint256 pricePerDay = (providerData.pricePerGB * fileMetadata[_fileId].fileSize) / 10**9; // Convert to per day
             
             storageContracts[contractId] = StorageContract({
                 fileId: _fileId,
                 provider: provider,
                 client: msg.sender,
                 duration: duration,
-                pricePerDay: pricePerDay,
                 startTime: block.timestamp,
                 endTime: block.timestamp + (duration * 1 days),
                 isActive: true,
-                collateral: pricePerDay * 30, // 30 days collateral
                 lastProofTime: block.timestamp
             });
 
@@ -224,7 +183,7 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Select best storage providers based on reputation, price, and availability
+     * @dev Select best storage providers based on reputation and availability
      * @param _count Number of providers to select
      * @param _fileSize Size of file to store
      * @return Array of selected provider addresses
@@ -280,12 +239,10 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
         // Verify proof (simplified - in production, implement proper verification)
         bool proofValid = _verifyStorageProof(_merkleProof, _challengeResponse, storageContract.fileId);
         
+        StorageProvider storage provider = storageProviders[msg.sender];
+        
         if (proofValid) {
-            // Reward provider
-            _rewardProvider(msg.sender, incentivePool.rewardRate);
-            
-            // Update reputation
-            StorageProvider storage provider = storageProviders[msg.sender];
+            // Update reputation positively
             if (provider.reputation < MAX_REPUTATION) {
                 provider.reputation = provider.reputation + 1;
             }
@@ -293,8 +250,13 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
             storageContract.lastProofTime = block.timestamp;
             emit ProofOfStorageSubmitted(_contractId, msg.sender, true);
         } else {
-            // Penalize provider
-            _penalizeProvider(msg.sender, incentivePool.penaltyRate);
+            // Decrease reputation for failed proof
+            if (provider.reputation >= 10) {
+                provider.reputation = provider.reputation - 10;
+            } else {
+                provider.reputation = 0;
+            }
+            
             emit ProofOfStorageSubmitted(_contractId, msg.sender, false);
         }
     }
@@ -315,46 +277,7 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
         return _merkleProof.length > 0 && _challengeResponse != bytes32(0) && bytes(_fileId).length > 0;
     }
 
-    /**
-     * @dev Reward storage provider
-     * @param _provider Provider address
-     * @param _amount Reward amount
-     */
-    function _rewardProvider(address _provider, uint256 _amount) internal {
-        require(incentivePool.totalRewards >= incentivePool.distributedRewards + _amount, "Insufficient reward pool");
-        
-        providerEarnings[_provider] = providerEarnings[_provider] + _amount;
-        incentivePool.distributedRewards = incentivePool.distributedRewards + _amount;
-        
-        emit RewardDistributed(_provider, _amount);
-    }
 
-    /**
-     * @dev Penalize storage provider
-     * @param _provider Provider address
-     * @param _amount Penalty amount
-     */
-    function _penalizeProvider(address _provider, uint256 _amount) internal {
-        StorageProvider storage provider = storageProviders[_provider];
-        
-        if (provider.stakedAmount >= _amount) {
-            provider.stakedAmount = provider.stakedAmount - _amount;
-        } else {
-            provider.stakedAmount = 0;
-        }
-        
-        // Decrease reputation
-        if (provider.reputation >= 10) {
-            provider.reputation = provider.reputation >= 10 ? provider.reputation - 10 : 0;
-        } else {
-            provider.reputation = 0;
-        }
-        
-        // Add to incentive pool
-        incentivePool.totalRewards = incentivePool.totalRewards + _amount;
-        
-        emit PenaltyApplied(_provider, _amount);
-    }
 
     /**
      * @dev Access a file (updates access statistics)
@@ -399,51 +322,24 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Withdraw earnings for storage providers
-     */
-    function withdrawEarnings() external nonReentrant {
-        uint256 earnings = providerEarnings[msg.sender];
-        require(earnings > 0, "No earnings to withdraw");
-        
-        providerEarnings[msg.sender] = 0;
-        require(storageToken.transfer(msg.sender, earnings), "Transfer failed");
-    }
-
-    /**
-     * @dev Add funds to incentive pool (only owner)
-     * @param _amount Amount to add
-     */
-    function addToIncentivePool(uint256 _amount) external onlyOwner {
-        require(
-            storageToken.transferFrom(msg.sender, address(this), _amount),
-            "Transfer failed"
-        );
-        
-        incentivePool.totalRewards = incentivePool.totalRewards + _amount;
-    }
-
-    /**
-     * @dev Slash provider for misbehavior (only owner)
+     * @dev Deactivate a provider (only owner)
      * @param _provider Provider address
-     * @param _amount Amount to slash
-     * @param _reason Reason for slashing
+     * @param _reason Reason for deactivation
      */
-    function slashProvider(address _provider, uint256 _amount, string memory _reason) external onlyOwner {
+    function deactivateProvider(address _provider, string memory _reason) external onlyOwner {
         StorageProvider storage provider = storageProviders[_provider];
         require(provider.isActive, "Provider is not active");
         
-        if (provider.stakedAmount >= _amount) {
-            provider.stakedAmount = provider.stakedAmount - _amount;
-        } else {
-            provider.stakedAmount = 0;
-        }
+        provider.isActive = false;
         
-        // If stake falls below minimum, deactivate provider
-        if (provider.stakedAmount < MIN_STAKE) {
-            provider.isActive = false;
+        // Remove from active providers array
+        for (uint256 i = 0; i < activeProviders.length; i++) {
+            if (activeProviders[i] == _provider) {
+                activeProviders[i] = activeProviders[activeProviders.length - 1];
+                activeProviders.pop();
+                break;
+            }
         }
-        
-        emit ProviderSlashed(_provider, _amount, _reason);
     }
 
     /**
@@ -484,26 +380,20 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
      * @return totalStorage Total storage capacity
      * @return usedStorage Currently used storage
      * @return reputation Provider reputation score
-     * @return pricePerGB Price per GB in tokens
      * @return isActive Whether provider is active
-     * @return stakedAmount Amount of tokens staked
      */
     function getProviderInfo(address _provider) external view returns (
         uint256 totalStorage,
         uint256 usedStorage,
         uint256 reputation,
-        uint256 pricePerGB,
-        bool isActive,
-        uint256 stakedAmount
+        bool isActive
     ) {
         StorageProvider storage provider = storageProviders[_provider];
         return (
             provider.totalStorage,
             provider.usedStorage,
             provider.reputation,
-            provider.pricePerGB,
-            provider.isActive,
-            provider.stakedAmount
+            provider.isActive
         );
     }
 
@@ -523,24 +413,5 @@ contract DecentralizedStorageManager is Ownable, ReentrancyGuard {
         return activeProviders.length;
     }
 
-    /**
-     * @dev Get incentive pool information
-     * @return totalRewards Total rewards in the pool
-     * @return distributedRewards Amount of rewards distributed
-     * @return rewardRate Current reward rate
-     * @return penaltyRate Current penalty rate
-     */
-    function getIncentivePoolInfo() external view returns (
-        uint256 totalRewards,
-        uint256 distributedRewards,
-        uint256 rewardRate,
-        uint256 penaltyRate
-    ) {
-        return (
-            incentivePool.totalRewards,
-            incentivePool.distributedRewards,
-            incentivePool.rewardRate,
-            incentivePool.penaltyRate
-        );
-    }
+
 }

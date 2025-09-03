@@ -11,9 +11,8 @@ async function main() {
     };
 
     console.log("Deployment options:", deploymentOptions);
-    // For testing, use zero address as storage token (can be updated later)
-    const storageTokenAddress = "0x0000000000000000000000000000000000000000";
-    const fileManager = await FileManager.deploy(storageTokenAddress, deploymentOptions);
+    // Deploy FileManager without token dependencies
+    const fileManager = await FileManager.deploy(deploymentOptions);
 
     // Wait for the deployment to be confirmed
     console.log("Waiting for deployment confirmation...");

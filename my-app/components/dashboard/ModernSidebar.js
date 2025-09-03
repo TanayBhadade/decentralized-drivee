@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-const ModernSidebar = ({ activeSection, setActiveSection, account, disconnectWallet, storBalance, onBuySTOR, onAIChatClick }) => {
+const ModernSidebar = ({ activeSection, setActiveSection, account, disconnectWallet, onAIChatClick }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const router = useRouter();
 
@@ -73,28 +73,7 @@ const ModernSidebar = ({ activeSection, setActiveSection, account, disconnectWal
         ))}
       </nav>
 
-      {/* STOR Token Balance */}
-      {!isCollapsed && (
-        <div className="p-4 border-t border-electric-cyan/20">
-          <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-xl p-4 mb-4 border border-yellow-500/30">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-2">
-                <span className="text-2xl">💰</span>
-                <div>
-                  <p className="text-light-silver font-bold text-lg">{storBalance?.toLocaleString() || 0} STOR</p>
-                  <p className="text-light-silver/60 text-xs">Token Balance</p>
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={onBuySTOR}
-              className="w-full px-4 py-2 bg-gradient-to-r from-yellow-500/30 to-orange-500/30 text-yellow-400 border border-yellow-500/40 rounded-lg hover:bg-gradient-to-r hover:from-yellow-500/40 hover:to-orange-500/40 transition-all duration-200 text-sm font-medium"
-            >
-              💳 Buy STOR Tokens
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {/* User Account */}
       <div className="p-4 border-t border-electric-cyan/20">

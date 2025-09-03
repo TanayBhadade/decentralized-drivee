@@ -93,9 +93,7 @@ export default function DashboardPage() {
   const [userAccount, setUserAccount] = useState(null); // Store authenticated user account
   const [authError, setAuthError] = useState(null);
   
-  // STOR token economy states
-  const [storBalance, setStorBalance] = useState(1000); // Initial airdrop of 1000 STOR
-  const [showBuyStorModal, setShowBuyStorModal] = useState(false);
+
   const [showAIChat, setShowAIChat] = useState(false);
 
   // All useEffect hooks must be called before any early returns
@@ -707,106 +705,9 @@ export default function DashboardPage() {
         throw new Error(`Account mismatch: MetaMask account (${signerAddress}) does not match connected account (${account})`);
       }
 
-      // Get StorageToken contract instance
-      const storageTokenAddress = process.env.NEXT_PUBLIC_STORAGE_TOKEN_ADDRESS;
-      if (!storageTokenAddress) {
-        throw new Error('StorageToken address not configured');
-      }
-
-      const storageTokenContract = new ethers.Contract(
-        storageTokenAddress,
-        [
-          'function approve(address spender, uint256 amount) external returns (bool)',
-          'function allowance(address owner, address spender) external view returns (uint256)',
-          'function balanceOf(address account) external view returns (uint256)'
-        ],
-        signer
-      );
-      
-      // Verify contract is accessible with retry mechanism
-      try {
-        const code = await retryWithBackoff(async () => {
-          return await provider.getCode(storageTokenAddress);
-        });
-        
-        if (code === '0x') {
-          throw new Error('StorageToken contract not found at the specified address. Please ensure the contract is deployed.');
-        }
-        console.log('StorageToken contract verified at:', storageTokenAddress);
-      } catch (codeError) {
-        console.error('Contract verification failed:', codeError);
-        throw new Error(`Contract verification failed: ${codeError.message}`);
-      }
-
-      // Check user's token balance
-      console.log('Checking balance for account:', account);
-      console.log('StorageToken contract address:', storageTokenAddress);
-      
-      // Validate account address format
-      if (!ethers.isAddress(account)) {
-        throw new Error(`Invalid account address format: ${account}`);
-      }
-      
-      let balance;
-      try {
-        // Use the signer address instead of the account variable to ensure consistency
-        const addressToCheck = signerAddress;
-        console.log('Calling balanceOf for address:', addressToCheck);
-        
-        balance = await retryWithBackoff(async () => {
-          return await storageTokenContract.balanceOf(addressToCheck);
-        });
-        
-        console.log('Balance retrieved successfully:', ethers.formatEther(balance), 'STOR');
-      } catch (balanceError) {
-        console.error('Failed to get balance:', balanceError);
-        console.error('Full error details:', {
-          message: balanceError.message,
-          code: balanceError.code,
-          data: balanceError.data,
-          transaction: balanceError.transaction
-        });
-        throw new Error(`Failed to retrieve token balance: ${balanceError.message}. Please ensure you are connected to the correct network and the contract is deployed.`);
-      }
-      
-      const minStake = ethers.parseEther('1000'); // 1000 tokens required
-      
-      if (balance < minStake) {
-        if (window.showToast) {
-          window.showToast('Insufficient STOR token balance. You need 1000 STOR tokens to register as a storage provider.', 'error');
-        }
-        return;
-      }
-
-      // Check current allowance
-      console.log('Checking allowance for:', signerAddress, 'to spend for contract:', contract.target);
-      
-      const currentAllowance = await retryWithBackoff(async () => {
-        return await storageTokenContract.allowance(signerAddress, contract.target);
-      });
-      
-      console.log('Current allowance:', ethers.formatEther(currentAllowance), 'STOR');
-      
-      // If allowance is insufficient, request approval
-      if (currentAllowance < minStake) {
-        console.log('Requesting token approval...');
-        if (window.showToast) {
-          window.showToast('Please approve the contract to spend your STOR tokens...', 'info');
-        }
-        
-        const approveTx = await storageTokenContract.approve(contract.target, minStake);
-        await approveTx.wait();
-        
-        console.log('Token approval granted');
-        if (window.showToast) {
-          window.showToast('Token approval granted! Now registering provider...', 'success');
-        }
-      }
-
-      // Register with mock data (1TB storage, 1 wei per GB, mock node ID)
+      // Register with mock data (1TB storage, mock node ID)
       const tx = await contract.registerProvider(
         1000000000000, // 1TB in bytes
-        1, // 1 wei per GB (very cheap for development)
         'mock-node-id-' + Date.now(),
         'development'
       );
@@ -842,12 +743,8 @@ export default function DashboardPage() {
         errorMessage = 'Contract call failed. Please ensure you are connected to the correct network and contracts are deployed.';
       } else if (error.message.includes('Provider already registered')) {
         errorMessage = 'Storage provider already registered for this account.';
-      } else if (error.message.includes('Failed to stake tokens')) {
-        errorMessage = 'Insufficient token allowance or balance. Please ensure you have 1000 STOR tokens and approve the contract.';
-      } else if (error.message.includes('Insufficient STOR token balance')) {
-        errorMessage = 'You need 1000 STOR tokens to register as a storage provider.';
       } else if (error.message.includes('execution reverted')) {
-        errorMessage = 'Transaction failed. Please ensure you have enough STOR tokens and gas fees.';
+        errorMessage = 'Transaction failed. Please ensure you have enough gas fees.';
       } else if (error.message.includes('Please switch to Hardhat Local network')) {
         errorMessage = error.message; // Use the detailed network error message
       }
@@ -949,26 +846,8 @@ export default function DashboardPage() {
   };
 
   const handleShareFile = (file) => {
-    // Check if user has enough STOR tokens for premium sharing
-    if (storBalance < 50) {
-      if (window.showToast) {
-          window.showToast('Insufficient STOR balance. You need 50 STOR tokens to share files. Please buy more STOR tokens.', 'warning');
-        }
-      setShowBuyStorModal(true);
-      return;
-    }
-    
-    // Deduct 50 STOR tokens for premium sharing
-    setStorBalance(prev => prev - 50);
     setSelectedFileForSharing(file);
     setShowShareModal(true);
-    
-    // Show success message
-    setTimeout(() => {
-      if (window.showToast) {
-          window.showToast('50 STOR tokens deducted for premium file sharing!', 'success');
-        }
-    }, 500);
   };
 
   const handleDedicatedShare = () => {
@@ -1007,14 +886,7 @@ export default function DashboardPage() {
     setSelectedFileForVersions(null);
   };
 
-  const handleBuySTOR = (amount) => {
-    // Simulate buying STOR tokens
-    setStorBalance(prev => prev + amount);
-    setShowBuyStorModal(false);
-    if (window.showToast) {
-      window.showToast(`Successfully purchased ${amount} STOR tokens!`, 'success');
-    }
-  };
+
 
   const handleDownload = async (file) => {
     if (!encryptionKey) {
@@ -1590,8 +1462,6 @@ export default function DashboardPage() {
         setActiveSection={setActiveSection}
         account={account}
         disconnectWallet={disconnectWallet}
-        storBalance={storBalance}
-        onBuySTOR={() => setShowBuyStorModal(true)}
         onAIChatClick={() => setShowAIChat(true)}
       />
 
@@ -1649,72 +1519,7 @@ export default function DashboardPage() {
         fileName={analyzingFileName}
       />
       
-      {/* Buy STOR Modal */}
-      {showBuyStorModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-gradient-to-br from-space-indigo/95 to-purple-900/95 backdrop-blur-sm border border-electric-cyan/20 rounded-2xl p-8 max-w-md w-full mx-4">
-            <h2 className="text-2xl font-bold text-light-silver mb-6 text-center">💰 Buy STOR Tokens</h2>
-            <p className="text-light-silver/60 mb-6 text-center">Choose a token pack to purchase with your preferred payment method</p>
-            
-            <div className="space-y-4 mb-6">
-              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(1000)}>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="text-light-silver font-semibold">Starter Pack</h3>
-                    <p className="text-light-silver/60 text-sm">1,000 STOR tokens</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-electric-cyan font-bold">₹100</p>
-                    <p className="text-light-silver/60 text-xs">~$1.20</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(5000)}>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="text-light-silver font-semibold">Pro Pack</h3>
-                    <p className="text-light-silver/60 text-sm">5,000 STOR tokens</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-electric-cyan font-bold">₹450</p>
-                    <p className="text-light-silver/60 text-xs">~$5.40</p>
-                    <span className="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">10% OFF</span>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(10000)}>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="text-light-silver font-semibold">Premium Pack</h3>
-                    <p className="text-light-silver/60 text-sm">10,000 STOR tokens</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-electric-cyan font-bold">₹800</p>
-                    <p className="text-light-silver/60 text-xs">~$9.60</p>
-                    <span className="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">20% OFF</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex space-x-4">
-              <button
-                onClick={() => setShowBuyStorModal(false)}
-                className="flex-1 px-4 py-2 bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded-lg hover:bg-gray-500/30 transition-colors duration-200"
-              >
-                Cancel
-              </button>
-            </div>
-            
-            <div className="mt-4 text-center">
-              <p className="text-light-silver/40 text-xs">💳 Supports UPI, Cards & Net Banking</p>
-              <p className="text-light-silver/40 text-xs">🔒 Secure payment powered by Razorpay</p>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* AI Chat Modal */}
       {showAIChat && (
