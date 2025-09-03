@@ -406,10 +406,8 @@ class FileIntegrityService {
    * @returns {Uint8Array} Mock file data
    */
   async simulateFileDownload(fileId) {
-    // This would be replaced with actual file download logic
-    // For now, return mock data
-    const mockData = `Mock file data for ${fileId}`;
-    return new Uint8Array(Buffer.from(mockData, 'utf8'));
+    // This method should be replaced with actual file download logic
+    throw new Error('simulateFileDownload method needs to be implemented with actual download logic');
   }
 
   /**
@@ -442,7 +440,65 @@ export default new FileIntegrityService();
 export { FileIntegrityService };
 
 // Export specific functions for direct import
-export const downloadWithIntegrityCheck = async (fileId, expectedHash) => {
-  const service = new FileIntegrityService();
-  return await service.downloadWithIntegrityCheck(fileId, expectedHash);
+export const downloadWithIntegrityCheck = async (cid, fileName, encryptionKey, metadata = {}) => {
+  try {
+    // Create a temporary link to download from IPFS gateway
+    const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${cid}`;
+    
+    const response = await fetch(ipfsUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download file: ${response.statusText}`);
+    }
+    
+    const encryptedData = await response.arrayBuffer();
+    
+    // Decrypt the file if encryption key is provided
+    let fileData;
+    if (encryptionKey) {
+      const CryptoJS = (await import('crypto-js')).default;
+      const encryptedBase64 = btoa(String.fromCharCode(...new Uint8Array(encryptedData)));
+      const decryptedBytes = CryptoJS.AES.decrypt(encryptedBase64, encryptionKey);
+      const decryptedString = decryptedBytes.toString(CryptoJS.enc.Utf8);
+      
+      if (!decryptedString) {
+        throw new Error('Failed to decrypt file - invalid encryption key');
+      }
+      
+      // Convert back to binary data
+      const binaryString = atob(decryptedString);
+      fileData = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        fileData[i] = binaryString.charCodeAt(i);
+      }
+    } else {
+      fileData = new Uint8Array(encryptedData);
+    }
+    
+    // Create download link
+    const blob = new Blob([fileData]);
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    
+    // Perform integrity check if metadata contains expected hash
+    if (metadata.expectedHash) {
+      const service = new FileIntegrityService();
+      const actualHash = service.calculateFileHash(fileData).contentHash;
+      
+      if (actualHash !== metadata.expectedHash) {
+        console.warn('File integrity check failed: hash mismatch');
+        return false;
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Download with integrity check failed:', error);
+    throw error;
+  }
 };

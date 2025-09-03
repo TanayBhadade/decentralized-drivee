@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 import CryptoJS from 'crypto-js';
-// import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
+import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
 
 const FileVersions = ({ file, contract, account, encryptionKey, onClose }) => {
   const [versions, setVersions] = useState([]);

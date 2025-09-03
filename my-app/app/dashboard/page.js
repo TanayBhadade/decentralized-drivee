@@ -1,11 +1,12 @@
 "use client";
 import { useState, useEffect } from 'react';
-import axios from 'axios';
+import { create } from '@storacha/client';
 import CryptoJS from 'crypto-js';
 import dynamic from 'next/dynamic';
 
 import { useRouter } from 'next/navigation';
 import { useWallet } from '../../hooks/useWallet';
+import StorachaAuthService, { StorachaAuthErrors } from '../../utils/storachaAuth';
 
 // Components
 import Sidebar from '../../components/Sidebar';
@@ -19,6 +20,8 @@ import ModernSidebar from '../../components/dashboard/ModernSidebar';
 import StatCard from '../../components/dashboard/StatCard';
 import UploadCenter from '../../components/UploadCenter';
 import AnalyticsDashboard from '../../components/AnalyticsDashboard';
+import StorachaStatus from '../../components/StorachaStatus';
+import { ToastManager } from '../../components/NotificationToast';
 // Dynamic import for AIFileChat to reduce initial bundle size
 const AIFileChat = dynamic(() => import('../../components/AIFileChat'), {
   loading: () => (
@@ -79,12 +82,160 @@ export default function DashboardPage() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [currentAnalysisStep, setCurrentAnalysisStep] = useState('');
   const [analyzingFileName, setAnalyzingFileName] = useState('');
+  
+  // Storacha client states
+  const [storachaClient, setStorachaClient] = useState(null);
+  const [isStorachaReady, setIsStorachaReady] = useState(false);
+  const [storachaEmail, setStorachaEmail] = useState('');
+  const [isStorachaLoading, setIsStorachaLoading] = useState(false);
+  const [storachaSpace, setStorachaSpace] = useState(null);
+  const [authError, setAuthError] = useState(null);
+  
+  // STOR token economy states
+  const [storBalance, setStorBalance] = useState(1000); // Initial airdrop of 1000 STOR
+  const [showBuyStorModal, setShowBuyStorModal] = useState(false);
+  const [showAIChat, setShowAIChat] = useState(false);
 
   // All useEffect hooks must be called before any early returns
   // This effect runs only once on the client after the component mounts
   useEffect(() => {
     setIsClient(true);
-  }, []);
+    // Initialize Storacha client and restore session
+    const initStoracha = async () => {
+      try {
+        const client = await create();
+        setStorachaClient(client);
+        
+        // Check for existing session
+        try {
+          const existingSession = StorachaAuthService.getSession();
+          if (existingSession) {
+            console.log('Restoring Storacha session for:', existingSession.email);
+            setStorachaEmail(existingSession.email);
+            setIsStorachaReady(true);
+            
+            // Validate session by attempting to use the client
+            try {
+              // If we have session data with space info, restore it
+              if (existingSession.sessionData && existingSession.sessionData.space) {
+                setStorachaSpace(existingSession.sessionData.space);
+              }
+            } catch (error) {
+              console.warn('Session validation failed, clearing session:', error);
+              StorachaAuthService.clearSession();
+              setIsStorachaReady(false);
+              setStorachaEmail('');
+            }
+          }
+        } catch (error) {
+          // Handle specific authentication errors
+          if (error.type === StorachaAuthErrors.SESSION_EXPIRED) {
+            console.log('Session expired during initialization');
+            setAuthError('Your session has expired. Please log in again.');
+            if (window.showToast) {
+              window.showToast('Your Storacha session has expired. Please log in again.', 'warning');
+            }
+          } else if (error.type === StorachaAuthErrors.SESSION_CORRUPTED) {
+            console.log('Session corrupted during initialization');
+            setAuthError('Session data is corrupted. Please log in again.');
+            if (window.showToast) {
+              window.showToast('Session data is corrupted. Please log in again.', 'error');
+            }
+          } else if (error.type === StorachaAuthErrors.STORAGE_NOT_AVAILABLE) {
+            console.error('Storage not available');
+            setAuthError('Browser storage is not available. Please check your browser settings.');
+            if (window.showToast) {
+              window.showToast('Browser storage is not available. Please check your browser settings.', 'error');
+            }
+          } else {
+            console.error('Unknown error during session restoration:', error);
+            setAuthError('Failed to restore session. Please log in again.');
+            if (window.showToast) {
+              window.showToast('Failed to restore Storacha session. Please log in again.', 'error');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to initialize Storacha client:', error);
+        setAuthError('Failed to initialize Storacha client');
+      }
+    };
+     initStoracha();
+   }, []);
+
+   const handleStorachaLogout = () => {
+      try {
+        // Use secure cleanup for enhanced security
+        const cleanupSuccess = StorachaAuthService.secureCleanup();
+        
+        setIsStorachaReady(false);
+        setStorachaEmail('');
+        setStorachaSpace(null);
+        setAuthError(null);
+        console.log('Storacha logout successful');
+        
+        if (cleanupSuccess && window.showToast) {
+          window.showToast('Successfully disconnected from Storacha', 'info');
+        } else if (window.showToast) {
+          window.showToast('Disconnected, but some cleanup operations failed', 'warning');
+        }
+      } catch (error) {
+        console.error('Error during logout:', error);
+        setAuthError('Error during logout');
+        if (window.showToast) {
+          window.showToast('Error during logout', 'error');
+        }
+      }
+    };
+
+    // Monitor session expiry and auto-logout with enhanced validation
+    useEffect(() => {
+      if (!isStorachaReady) return;
+
+      const performSessionHealthCheck = () => {
+        const healthCheck = StorachaAuthService.performHealthCheck();
+        
+        if (!healthCheck.overall.healthy) {
+          console.log('Storacha session health check failed:', healthCheck.overall.issues);
+          
+          if (healthCheck.integrity.errorType === 'SESSION_EXPIRED') {
+            handleStorachaLogout();
+            setAuthError('Your Storacha session has expired. Please log in again.');
+            if (window.showToast) {
+              window.showToast('Your Storacha session has expired. Please log in again.', 'warning');
+            }
+          } else if (!healthCheck.storageAvailable) {
+            setAuthError('Browser storage is not available. Session cannot be maintained.');
+            if (window.showToast) {
+              window.showToast('Browser storage is not available. Session cannot be maintained.', 'error');
+            }
+          } else if (healthCheck.integrity.errorType === 'SESSION_CORRUPTED') {
+            handleStorachaLogout();
+            setAuthError('Session data is corrupted. Please log in again.');
+            if (window.showToast) {
+              window.showToast('Session data is corrupted. Please log in again.', 'error');
+            }
+          }
+        } else {
+          // Check for expiry warnings
+          const expiryWarning = StorachaAuthService.getExpiryWarning();
+          if (expiryWarning.shouldWarn && window.showToast) {
+            window.showToast(expiryWarning.message, 'warning');
+          }
+          
+          // Auto-refresh session if needed
+          StorachaAuthService.autoRefreshIfNeeded();
+        }
+      };
+
+      // Check session health every 5 minutes
+      const intervalId = setInterval(performSessionHealthCheck, 5 * 60 * 1000);
+      
+      // Also check immediately
+      performSessionHealthCheck();
+
+      return () => clearInterval(intervalId);
+    }, [isStorachaReady]);
 
   // Redirect to login if not connected
   useEffect(() => {
@@ -183,9 +334,107 @@ export default function DashboardPage() {
     setSelectedFile(e.target.files[0]);
   };
 
+  const handleStorachaLogin = async (email) => {
+    if (!storachaClient || !email) {
+      setAuthError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsStorachaLoading(true);
+    setAuthError(null);
+    
+    try {
+      console.log('Logging into Storacha with email:', email);
+      
+      // Check if user already has a valid session
+      try {
+        const existingSession = StorachaAuthService.getSession();
+        if (existingSession && existingSession.email === email) {
+          console.log('Using existing valid session');
+          setStorachaEmail(email);
+          setIsStorachaReady(true);
+          if (existingSession.sessionData && existingSession.sessionData.space) {
+            setStorachaSpace(existingSession.sessionData.space);
+          }
+          if (window.showToast) {
+            window.showToast('Successfully restored your Storacha session!', 'success');
+          }
+          return;
+        }
+      } catch (sessionError) {
+        // Session check failed, continue with new login
+        console.log('Session check failed, proceeding with new login:', sessionError.message);
+      }
+      
+      await storachaClient.login(email);
+      
+      // Wait for email verification (in real implementation, this would be handled differently)
+      alert('Please check your email and click the verification link. Click OK after verification.');
+      
+      // Create a space for the user
+      const space = await storachaClient.createSpace('my-decentralized-drive');
+      console.log('Storacha space created:', space);
+      
+      // Save session data
+      const sessionData = {
+        space: space,
+        loginTimestamp: Date.now()
+      };
+      
+      try {
+        StorachaAuthService.saveSession(email, space.did || space.toString(), sessionData);
+        setStorachaEmail(email);
+        setStorachaSpace(space);
+        setIsStorachaReady(true);
+        console.log('Storacha login successful and session saved');
+        if (window.showToast) {
+          window.showToast('Successfully connected to Storacha! You can now upload files securely.', 'success');
+        }
+      } catch (saveError) {
+        console.warn('Login successful but session save failed:', saveError.message);
+        // Still set the session state even if save failed
+        setStorachaEmail(email);
+        setStorachaSpace(space);
+        setIsStorachaReady(true);
+        
+        // Show warning to user about session persistence
+        if (saveError.type === StorachaAuthErrors.STORAGE_NOT_AVAILABLE) {
+          setAuthError('Login successful, but session cannot be saved. You may need to log in again after refreshing.');
+          if (window.showToast) {
+            window.showToast('Connected to Storacha, but session cannot be saved. You may need to log in again after refreshing.', 'warning');
+          }
+        } else {
+          if (window.showToast) {
+            window.showToast('Connected to Storacha successfully!', 'success');
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('Storacha login failed:', error);
+      setAuthError(`Storacha login failed: ${error.message}`);
+      if (window.showToast) {
+        window.showToast(`Storacha login failed: ${error.message}`, 'error');
+      }
+      
+      // Clear any existing session on login failure
+      StorachaAuthService.clearSession();
+      setIsStorachaReady(false);
+      setStorachaEmail('');
+      setStorachaSpace(null);
+    } finally {
+       setIsStorachaLoading(false);
+     }
+   };
+
   const handleUpload = async () => {
     if (!selectedFile || !encryptionKey) {
       alert("Please select a file and enter an encryption key.");
+      return;
+    }
+
+    if (!isStorachaReady) {
+      alert("Please login to Storacha first.");
       return;
     }
 
@@ -196,19 +445,11 @@ export default function DashboardPage() {
         const encrypted = CryptoJS.AES.encrypt(fileContent, encryptionKey).toString();
 
         const blob = new Blob([encrypted], { type: 'text/plain' });
-        const formData = new FormData();
-        formData.append('file', blob, selectedFile.name);
+        const file = new File([blob], selectedFile.name, { type: 'text/plain' });
 
-        console.log('Uploading to Pinata...');
-        const res = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", formData, {
-          headers: {
-            'pinata_api_key': process.env.NEXT_PUBLIC_PINATA_API_KEY,
-            'pinata_secret_api_key': process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY,
-          },
-        });
-
-        console.log('Pinata response:', res.data);
-        const cid = res.data.IpfsHash;
+        console.log('Uploading to Storacha...');
+        const cid = await storachaClient.uploadFile(file);
+        console.log('Storacha upload successful, CID:', cid);
         const fileId = `${Date.now()}_${selectedFile.name}`;
         
         console.log('Uploading to blockchain...');
@@ -262,8 +503,22 @@ export default function DashboardPage() {
   };
 
   const handleShareFile = (file) => {
+    // Check if user has enough STOR tokens for premium sharing
+    if (storBalance < 50) {
+      alert('Insufficient STOR balance. You need 50 STOR tokens to share files. Please buy more STOR tokens.');
+      setShowBuyStorModal(true);
+      return;
+    }
+    
+    // Deduct 50 STOR tokens for premium sharing
+    setStorBalance(prev => prev - 50);
     setSelectedFileForSharing(file);
     setShowShareModal(true);
+    
+    // Show success message
+    setTimeout(() => {
+      alert('50 STOR tokens deducted for premium file sharing!');
+    }, 500);
   };
 
   const handleDedicatedShare = () => {
@@ -298,6 +553,13 @@ export default function DashboardPage() {
   const closeVersionsModal = () => {
     setShowVersionsModal(false);
     setSelectedFileForVersions(null);
+  };
+
+  const handleBuySTOR = (amount) => {
+    // Simulate buying STOR tokens
+    setStorBalance(prev => prev + amount);
+    setShowBuyStorModal(false);
+    alert(`Successfully purchased ${amount} STOR tokens!`);
   };
 
   const handleDownload = async (file) => {
@@ -395,25 +657,21 @@ export default function DashboardPage() {
                 title="Total Files Stored"
                 value={stats.totalFiles}
                 icon="📁"
-                trend={12}
               />
               <StatCard
                 title="Storage Used"
                 value={stats.storageUsed}
                 icon="💾"
-                trend={-5}
               />
               <StatCard
                 title="Uploads This Month"
                 value={stats.uploadsThisMonth}
                 icon="⬆️"
-                trend={25}
               />
               <StatCard
                 title="Active File Shares"
                 value={stats.activeShares}
                 icon="🔗"
-                trend={8}
               />
             </div>
 
@@ -648,6 +906,16 @@ export default function DashboardPage() {
               <h1 className="text-3xl font-bold text-light-silver mb-2">Upload Center</h1>
               <p className="text-light-silver/60">Securely upload and encrypt your files to the decentralized network.</p>
             </div>
+            
+            {/* Storacha Connection Status */}
+            <StorachaStatus
+              isReady={isStorachaReady}
+              isLoading={isStorachaLoading}
+              email={storachaEmail}
+              authError={authError}
+              onLogin={handleStorachaLogin}
+              onLogout={handleStorachaLogout}
+            />
             <UploadCenter 
                account={account}
                onUpload={async (files, options) => {
@@ -672,16 +940,14 @@ export default function DashboardPage() {
                            const formData = new FormData();
                            formData.append('file', blob, fileData.name);
                            
-                           console.log(`Uploading ${fileData.name} to Pinata...`);
-                           const res = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", formData, {
-                             headers: {
-                               'pinata_api_key': process.env.NEXT_PUBLIC_PINATA_API_KEY,
-                               'pinata_secret_api_key': process.env.NEXT_PUBLIC_PINATA_SECRET_API_KEY,
-                             },
-                           });
+                           if (!isStorachaReady) {
+                             throw new Error('Please login to Storacha first');
+                           }
                            
-                           console.log(`Pinata response for ${fileData.name}:`, res.data);
-                           const cid = res.data.IpfsHash;
+                           console.log(`Uploading ${fileData.name} to Storacha...`);
+                           const file = new File([blob], fileData.name, { type: 'text/plain' });
+                           const cid = await storachaClient.uploadFile(file);
+                           console.log(`Storacha upload successful for ${fileData.name}, CID:`, cid);
                            const fileId = `${Date.now()}_${fileData.name}`;
                            
                            console.log(`Uploading ${fileData.name} to blockchain...`);
@@ -749,10 +1015,7 @@ export default function DashboardPage() {
           </div>
         );
 
-      case 'ai-chat':
-        return (
-          <AIFileChat files={files} account={account} />
-        );
+
 
       case 'analytics':
         return (
@@ -810,12 +1073,18 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-space-indigo via-purple-900/20 to-space-indigo flex">
+      {/* Toast Manager */}
+      <ToastManager />
+      
       {/* Sidebar */}
       <ModernSidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
         account={account}
         disconnectWallet={disconnectWallet}
+        storBalance={storBalance}
+        onBuySTOR={() => setShowBuyStorModal(true)}
+        onAIChatClick={() => setShowAIChat(true)}
       />
 
       {/* Main Content */}
@@ -861,6 +1130,82 @@ export default function DashboardPage() {
         currentStep={currentAnalysisStep}
         fileName={analyzingFileName}
       />
+      
+      {/* Buy STOR Modal */}
+      {showBuyStorModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-gradient-to-br from-space-indigo/95 to-purple-900/95 backdrop-blur-sm border border-electric-cyan/20 rounded-2xl p-8 max-w-md w-full mx-4">
+            <h2 className="text-2xl font-bold text-light-silver mb-6 text-center">💰 Buy STOR Tokens</h2>
+            <p className="text-light-silver/60 mb-6 text-center">Choose a token pack to purchase with your preferred payment method</p>
+            
+            <div className="space-y-4 mb-6">
+              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(1000)}>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-light-silver font-semibold">Starter Pack</h3>
+                    <p className="text-light-silver/60 text-sm">1,000 STOR tokens</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-electric-cyan font-bold">₹100</p>
+                    <p className="text-light-silver/60 text-xs">~$1.20</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(5000)}>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-light-silver font-semibold">Pro Pack</h3>
+                    <p className="text-light-silver/60 text-sm">5,000 STOR tokens</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-electric-cyan font-bold">₹450</p>
+                    <p className="text-light-silver/60 text-xs">~$5.40</p>
+                    <span className="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">10% OFF</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-electric-cyan/10 border border-electric-cyan/30 rounded-lg p-4 hover:bg-electric-cyan/20 transition-colors cursor-pointer" onClick={() => handleBuySTOR(10000)}>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-light-silver font-semibold">Premium Pack</h3>
+                    <p className="text-light-silver/60 text-sm">10,000 STOR tokens</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-electric-cyan font-bold">₹800</p>
+                    <p className="text-light-silver/60 text-xs">~$9.60</p>
+                    <span className="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs">20% OFF</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex space-x-4">
+              <button
+                onClick={() => setShowBuyStorModal(false)}
+                className="flex-1 px-4 py-2 bg-gray-500/20 text-gray-400 border border-gray-500/30 rounded-lg hover:bg-gray-500/30 transition-colors duration-200"
+              >
+                Cancel
+              </button>
+            </div>
+            
+            <div className="mt-4 text-center">
+              <p className="text-light-silver/40 text-xs">💳 Supports UPI, Cards & Net Banking</p>
+              <p className="text-light-silver/40 text-xs">🔒 Secure payment powered by Razorpay</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Chat Modal */}
+      {showAIChat && (
+        <AIFileChat 
+          files={files} 
+          account={account} 
+          onClose={() => setShowAIChat(false)}
+        />
+      )}
     </div>
   );
 }

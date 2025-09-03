@@ -22,11 +22,12 @@ const AIFileChat = ({ onClose }) => {
   const [error, setError] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [aiAnalyzer, setAiAnalyzer] = useState(null);
+  const [isVisible, setIsVisible] = useState(false);
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const { handleAsync, clearError } = useErrorHandler();
 
-  // Initialize AI analyzer
+  // Initialize AI analyzer and animation
   useEffect(() => {
     const initAI = async () => {
       try {
@@ -38,7 +39,18 @@ const AIFileChat = ({ onClose }) => {
       }
     };
     initAI();
+    
+    // Trigger entrance animation
+    setTimeout(() => setIsVisible(true), 10);
   }, []);
+
+  // Enhanced close handler with animation
+  const handleClose = () => {
+    setIsVisible(false);
+    setTimeout(() => {
+      onClose();
+    }, 200); // Wait for animation to complete
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -225,9 +237,40 @@ const AIFileChat = ({ onClose }) => {
     }
   };
 
+  // Handle escape key to close modal
+  useEffect(() => {
+    const handleEscapeKey = (e) => {
+      if (e.key === 'Escape') {
+        handleClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscapeKey);
+    return () => {
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, []);
+
+  // Handle click outside to close modal
+  const handleBackdropClick = (e) => {
+    if (e.target === e.currentTarget) {
+      handleClose();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-gradient-to-br from-space-indigo/95 to-purple-900/95 backdrop-blur-sm border border-electric-cyan/20 rounded-2xl w-full max-w-4xl h-[80vh] flex flex-col">
+    <div 
+      className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 transition-opacity duration-200 ${
+        isVisible ? 'opacity-100' : 'opacity-0'
+      }`}
+      onClick={handleBackdropClick}
+    >
+      <div 
+        className={`bg-gradient-to-br from-space-indigo/95 to-purple-900/95 backdrop-blur-sm border border-electric-cyan/20 rounded-2xl w-full max-w-4xl h-[80vh] flex flex-col transition-all duration-200 transform ${
+          isVisible ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4'
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-electric-cyan/20">
           <div className="flex items-center space-x-3">
@@ -235,8 +278,9 @@ const AIFileChat = ({ onClose }) => {
             <h2 className="text-2xl font-bold text-light-silver">AI File Chat</h2>
           </div>
           <button
-            onClick={onClose}
-            className="p-2 text-light-silver/60 hover:text-light-silver hover:bg-electric-cyan/10 rounded-lg transition-colors"
+            onClick={handleClose}
+            className="p-2 text-light-silver/60 hover:text-light-silver hover:bg-electric-cyan/10 rounded-lg transition-colors duration-200 hover:scale-105"
+            title="Close AI Chat (Esc)"
           >
             <XMarkIcon className="w-6 h-6" />
           </button>
@@ -261,9 +305,16 @@ const AIFileChat = ({ onClose }) => {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isProcessingFile}
-                className="px-6 py-3 bg-gradient-to-r from-electric-cyan to-blue-400 text-space-indigo font-semibold rounded-lg hover:shadow-lg hover:shadow-electric-cyan/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-3 bg-gradient-to-r from-electric-cyan to-blue-400 text-space-indigo font-semibold rounded-lg hover:shadow-lg hover:shadow-electric-cyan/30 hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
               >
-                {isProcessingFile ? 'Processing...' : 'Choose File'}
+                {isProcessingFile ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-space-indigo border-t-transparent rounded-full animate-spin"></div>
+                    <span>Processing...</span>
+                  </div>
+                ) : (
+                  'Choose File'
+                )}
               </button>
               
               {(error || errorMessage) && (
@@ -342,16 +393,23 @@ const AIFileChat = ({ onClose }) => {
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="Ask a question about your document..."
-                  className="flex-1 bg-space-indigo/50 border border-electric-cyan/30 text-light-silver rounded-lg px-4 py-3 focus:outline-none focus:border-electric-cyan resize-none"
+                  className="flex-1 bg-space-indigo/50 border border-electric-cyan/30 text-light-silver rounded-lg px-4 py-3 focus:outline-none focus:border-electric-cyan resize-none transition-all duration-200 focus:bg-space-indigo/60 focus:ring-2 focus:ring-electric-cyan/20"
                   rows="2"
                   disabled={isLoading}
                 />
                 <button
                   onClick={handleSendMessage}
                   disabled={!inputMessage.trim() || isLoading}
-                  className="px-4 py-3 bg-gradient-to-r from-electric-cyan to-blue-400 text-space-indigo font-semibold rounded-lg hover:shadow-lg hover:shadow-electric-cyan/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-3 bg-gradient-to-r from-electric-cyan to-blue-400 text-space-indigo font-semibold rounded-lg hover:shadow-lg hover:shadow-electric-cyan/30 hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                 >
-                  <PaperAirplaneIcon className="w-5 h-5" />
+                  {isLoading ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-space-indigo border-t-transparent rounded-full animate-spin"></div>
+                      <span>Sending...</span>
+                    </div>
+                  ) : (
+                    <PaperAirplaneIcon className="w-5 h-5" />
+                  )}
                 </button>
               </div>
               

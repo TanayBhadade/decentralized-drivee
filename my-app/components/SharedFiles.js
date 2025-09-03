@@ -5,7 +5,7 @@ import {
   validateAccessToken,
   getSharedKeyFromToken
 } from '../utils/keyManagement';
-// import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
+import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
 
 const SharedFiles = ({ account, contract }) => {
   const [sharedFiles, setSharedFiles] = useState([]);

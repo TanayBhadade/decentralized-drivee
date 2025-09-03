@@ -54,38 +54,21 @@ const AnalyticsDashboard = ({ files = [], stats = {} }) => {
     networkActivity: [120, 180, 240, 320, 280, 380, 420, 360, 480, 520, 460, 580]
   });
 
-  const [uploadHistory, setUploadHistory] = useState([
-    { id: 1, fileName: 'project-docs.pdf', size: '2.4 MB', timestamp: '2024-01-15 14:30', status: 'completed', hash: 'QmX7Y8Z9...' },
-    { id: 2, fileName: 'presentation.pptx', size: '15.7 MB', timestamp: '2024-01-15 13:45', status: 'completed', hash: 'QmA1B2C3...' },
-    { id: 3, fileName: 'database-backup.sql', size: '156.2 MB', timestamp: '2024-01-15 12:20', status: 'completed', hash: 'QmD4E5F6...' },
-    { id: 4, fileName: 'video-tutorial.mp4', size: '89.3 MB', timestamp: '2024-01-15 11:15', status: 'uploading', hash: 'QmG7H8I9...' },
-    { id: 5, fileName: 'source-code.zip', size: '34.1 MB', timestamp: '2024-01-15 10:30', status: 'completed', hash: 'QmJ0K1L2...' }
-  ]);
+  const [uploadHistory, setUploadHistory] = useState([]);
 
-  const [downloadHistory, setDownloadHistory] = useState([
-    { id: 1, fileName: 'research-paper.pdf', size: '3.2 MB', timestamp: '2024-01-15 15:20', status: 'completed', peer: 'node_abc123' },
-    { id: 2, fileName: 'software-installer.exe', size: '245.8 MB', timestamp: '2024-01-15 14:55', status: 'completed', peer: 'node_def456' },
-    { id: 3, fileName: 'music-album.zip', size: '78.9 MB', timestamp: '2024-01-15 13:30', status: 'downloading', peer: 'node_ghi789' },
-    { id: 4, fileName: 'photo-collection.tar', size: '512.4 MB', timestamp: '2024-01-15 12:45', status: 'completed', peer: 'node_jkl012' }
-  ]);
+  const [downloadHistory, setDownloadHistory] = useState([]);
 
-  const [accessLogs, setAccessLogs] = useState([
-    { id: 1, action: 'File Access', fileName: 'project-docs.pdf', user: '0x1234...5678', timestamp: '2024-01-15 15:45', ip: '192.168.1.100' },
-    { id: 2, action: 'Permission Grant', fileName: 'presentation.pptx', user: '0x9876...5432', timestamp: '2024-01-15 15:30', ip: '10.0.0.50' },
-    { id: 3, action: 'File Download', fileName: 'database-backup.sql', user: '0x5555...7777', timestamp: '2024-01-15 15:15', ip: '172.16.0.25' },
-    { id: 4, action: 'Share Link Created', fileName: 'video-tutorial.mp4', user: '0x1111...9999', timestamp: '2024-01-15 15:00', ip: '192.168.1.200' },
-    { id: 5, action: 'File Upload', fileName: 'source-code.zip', user: '0x8888...4444', timestamp: '2024-01-15 14:45', ip: '10.0.0.75' }
-  ]);
+  const [accessLogs, setAccessLogs] = useState([]);
 
   const [networkParticipation, setNetworkParticipation] = useState({
-    storageProvided: '500 GB',
-    storageUsed: '1.2 TB',
-    bandwidthShared: '2.8 TB',
-    rewardsEarned: '1,234.56 STOR',
-    proofSubmissions: 847,
-    successRate: '99.2%',
-    reputation: 892,
-    stakingAmount: '10,000 STOR'
+    storageProvided: '0 GB',
+    storageUsed: '0 GB',
+    bandwidthShared: '0 GB',
+    rewardsEarned: '0 STOR',
+    proofSubmissions: 0,
+    successRate: '0%',
+    reputation: 0,
+    stakingAmount: '0 STOR'
   });
 
   const timeRanges = [
@@ -243,8 +226,6 @@ const AnalyticsDashboard = ({ files = [], stats = {} }) => {
           title="Total Files"
           value={analyticsData.fileStats.totalFiles}
           icon={DocumentIcon}
-          trend="up"
-          trendValue={12}
           color="blue"
         />
         <StatCard
@@ -252,24 +233,18 @@ const AnalyticsDashboard = ({ files = [], stats = {} }) => {
           value={analyticsData.storageUsage.used}
           unit={analyticsData.storageUsage.unit}
           icon={CloudIcon}
-          trend="up"
-          trendValue={8}
           color="green"
         />
         <StatCard
           title="Network Peers"
           value={analyticsData.networkStats.peers}
           icon={GlobeAltIcon}
-          trend="up"
-          trendValue={5}
           color="purple"
         />
         <StatCard
           title="Total Downloads"
           value={analyticsData.fileStats.totalDownloads}
           icon={ShareIcon}
-          trend="up"
-          trendValue={23}
           color="orange"
         />
       </div>
@@ -535,12 +510,7 @@ const AnalyticsDashboard = ({ files = [], stats = {} }) => {
              </div>
              <CurrencyDollarIcon className="w-8 h-8 text-blue-500" />
            </div>
-           <div className="mt-4">
-             <div className="flex items-center text-sm text-green-600">
-               <ArrowTrendingUpIcon className="w-4 h-4 mr-1" />
-               <span>+12.5% from last month</span>
-             </div>
-           </div>
+
          </div>
 
          <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
@@ -551,12 +521,7 @@ const AnalyticsDashboard = ({ files = [], stats = {} }) => {
              </div>
              <EyeIcon className="w-8 h-8 text-purple-500" />
            </div>
-           <div className="mt-4">
-             <div className="flex items-center text-sm text-green-600">
-               <ArrowTrendingUpIcon className="w-4 h-4 mr-1" />
-               <span>+8.3% from last week</span>
-             </div>
-           </div>
+
          </div>
 
          <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
