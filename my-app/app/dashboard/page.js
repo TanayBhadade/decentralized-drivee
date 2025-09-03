@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { create } from '@storacha/client';
 import CryptoJS from 'crypto-js';
 import dynamic from 'next/dynamic';
+import { ethers } from 'ethers';
 
 import { useRouter } from 'next/navigation';
 import { useWallet } from '../../hooks/useWallet';
@@ -396,6 +397,55 @@ export default function DashboardPage() {
     }
   }, [contract, account]);
 
+  // Monitor wallet network changes and ensure proper connection
+  useEffect(() => {
+    if (!account || !window.ethereum) return;
+
+    const handleNetworkChange = async (chainId) => {
+      console.log('Network changed to:', chainId);
+      
+      // Check if we're on the correct network (Hardhat Local: 0x7A69)
+      if (chainId !== '0x7A69') {
+        console.warn('Not on Hardhat Local network. Current network:', chainId);
+        if (window.showToast) {
+          window.showToast('Please switch to Hardhat Local network (Chain ID: 31337)', 'warning');
+        }
+      } else {
+        console.log('Connected to Hardhat Local network');
+        if (window.showToast) {
+          window.showToast('Connected to Hardhat Local network', 'success');
+        }
+      }
+    };
+
+    const handleAccountChange = (accounts) => {
+      console.log('Account changed:', accounts);
+      if (accounts.length === 0) {
+        console.log('No accounts connected');
+        if (window.showToast) {
+          window.showToast('MetaMask disconnected. Please reconnect.', 'warning');
+        }
+      }
+    };
+
+    // Add event listeners
+    window.ethereum.on('chainChanged', handleNetworkChange);
+    window.ethereum.on('accountsChanged', handleAccountChange);
+
+    // Check current network on mount
+    window.ethereum.request({ method: 'eth_chainId' })
+      .then(handleNetworkChange)
+      .catch(console.error);
+
+    // Cleanup
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeListener('chainChanged', handleNetworkChange);
+        window.ethereum.removeListener('accountsChanged', handleAccountChange);
+      }
+    };
+  }, [account]);
+
   // Show loading state while wallet is initializing - MUST be after all hooks
   if (!isInitialized) {
     return (
@@ -516,6 +566,98 @@ export default function DashboardPage() {
      }
    };
 
+  // Helper function to check and switch to correct network
+  const ensureCorrectNetwork = async () => {
+    if (!window.ethereum) {
+      throw new Error('MetaMask not installed');
+    }
+
+    try {
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      const expectedChainId = '0x7A69'; // 31337 in hex (Hardhat default)
+      
+      if (chainId !== expectedChainId) {
+        console.log(`Current chain: ${chainId}, expected: ${expectedChainId}`);
+        
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: expectedChainId }],
+          });
+        } catch (switchError) {
+          // This error code indicates that the chain has not been added to MetaMask
+          if (switchError.code === 4902) {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: expectedChainId,
+                chainName: 'Hardhat Local',
+                rpcUrls: ['http://127.0.0.1:8545'],
+                nativeCurrency: {
+                  name: 'ETH',
+                  symbol: 'ETH',
+                  decimals: 18
+                }
+              }]
+            });
+          } else {
+            throw switchError;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Network verification failed:', error);
+      throw new Error(`Please switch to Hardhat Local network (Chain ID: 31337). Error: ${error.message}`);
+    }
+  };
+
+  // Helper function to check if Hardhat node is accessible
+  const checkHardhatConnection = async () => {
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.getNetwork();
+      return true;
+    } catch (error) {
+      console.error('Hardhat connection check failed:', error);
+      return false;
+    }
+  };
+
+  // Helper function to retry operations with exponential backoff
+  const retryWithBackoff = async (operation, maxRetries = 3, baseDelay = 1000) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        const isCircuitBreakerError = error.message?.includes('circuit breaker is open') || 
+                                    (error.code === 'UNKNOWN_ERROR' && 
+                                     error.error?.data?.cause?.isBrokenCircuitError);
+        
+        if (isCircuitBreakerError && attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(`Circuit breaker detected, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+          
+          // Wait for the delay
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // Try to reset MetaMask connection
+          try {
+            if (window.ethereum) {
+              await window.ethereum.request({ method: 'eth_requestAccounts' });
+            }
+          } catch (resetError) {
+            console.warn('Failed to reset MetaMask connection:', resetError);
+          }
+          
+          continue;
+        }
+        
+        // If it's the last attempt or not a circuit breaker error, throw the error
+        throw error;
+      }
+    }
+  };
+
   // Register a mock storage provider for development
   const registerMockProvider = async () => {
     if (!contract || !account) {
@@ -528,6 +670,15 @@ export default function DashboardPage() {
     try {
       console.log('Registering mock storage provider...');
       
+      // Check if Hardhat node is accessible
+      const isConnected = await checkHardhatConnection();
+      if (!isConnected) {
+        throw new Error('Cannot connect to Hardhat node. Please ensure the Hardhat node is running on http://127.0.0.1:8545');
+      }
+      
+      // Ensure we're on the correct network first
+      await ensureCorrectNetwork();
+      
       // Check if provider is already registered
       try {
         const providerInfo = await contract.getProviderInfo(account);
@@ -538,7 +689,118 @@ export default function DashboardPage() {
           return;
         }
       } catch (error) {
-        // Provider not registered yet, continue with registration
+        console.log('Provider not registered yet, continuing with registration...');
+      }
+
+      // Get provider and signer
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      
+      // Debug: Check current network and account
+      const network = await provider.getNetwork();
+      const signerAddress = await signer.getAddress();
+      console.log('Current network:', network.chainId, network.name);
+      console.log('Signer address:', signerAddress);
+      console.log('Expected account:', account);
+      
+      if (signerAddress.toLowerCase() !== account.toLowerCase()) {
+        throw new Error(`Account mismatch: MetaMask account (${signerAddress}) does not match connected account (${account})`);
+      }
+
+      // Get StorageToken contract instance
+      const storageTokenAddress = process.env.NEXT_PUBLIC_STORAGE_TOKEN_ADDRESS;
+      if (!storageTokenAddress) {
+        throw new Error('StorageToken address not configured');
+      }
+
+      const storageTokenContract = new ethers.Contract(
+        storageTokenAddress,
+        [
+          'function approve(address spender, uint256 amount) external returns (bool)',
+          'function allowance(address owner, address spender) external view returns (uint256)',
+          'function balanceOf(address account) external view returns (uint256)'
+        ],
+        signer
+      );
+      
+      // Verify contract is accessible with retry mechanism
+      try {
+        const code = await retryWithBackoff(async () => {
+          return await provider.getCode(storageTokenAddress);
+        });
+        
+        if (code === '0x') {
+          throw new Error('StorageToken contract not found at the specified address. Please ensure the contract is deployed.');
+        }
+        console.log('StorageToken contract verified at:', storageTokenAddress);
+      } catch (codeError) {
+        console.error('Contract verification failed:', codeError);
+        throw new Error(`Contract verification failed: ${codeError.message}`);
+      }
+
+      // Check user's token balance
+      console.log('Checking balance for account:', account);
+      console.log('StorageToken contract address:', storageTokenAddress);
+      
+      // Validate account address format
+      if (!ethers.isAddress(account)) {
+        throw new Error(`Invalid account address format: ${account}`);
+      }
+      
+      let balance;
+      try {
+        // Use the signer address instead of the account variable to ensure consistency
+        const addressToCheck = signerAddress;
+        console.log('Calling balanceOf for address:', addressToCheck);
+        
+        balance = await retryWithBackoff(async () => {
+          return await storageTokenContract.balanceOf(addressToCheck);
+        });
+        
+        console.log('Balance retrieved successfully:', ethers.formatEther(balance), 'STOR');
+      } catch (balanceError) {
+        console.error('Failed to get balance:', balanceError);
+        console.error('Full error details:', {
+          message: balanceError.message,
+          code: balanceError.code,
+          data: balanceError.data,
+          transaction: balanceError.transaction
+        });
+        throw new Error(`Failed to retrieve token balance: ${balanceError.message}. Please ensure you are connected to the correct network and the contract is deployed.`);
+      }
+      
+      const minStake = ethers.parseEther('1000'); // 1000 tokens required
+      
+      if (balance < minStake) {
+        if (window.showToast) {
+          window.showToast('Insufficient STOR token balance. You need 1000 STOR tokens to register as a storage provider.', 'error');
+        }
+        return;
+      }
+
+      // Check current allowance
+      console.log('Checking allowance for:', signerAddress, 'to spend for contract:', contract.target);
+      
+      const currentAllowance = await retryWithBackoff(async () => {
+        return await storageTokenContract.allowance(signerAddress, contract.target);
+      });
+      
+      console.log('Current allowance:', ethers.formatEther(currentAllowance), 'STOR');
+      
+      // If allowance is insufficient, request approval
+      if (currentAllowance < minStake) {
+        console.log('Requesting token approval...');
+        if (window.showToast) {
+          window.showToast('Please approve the contract to spend your STOR tokens...', 'info');
+        }
+        
+        const approveTx = await storageTokenContract.approve(contract.target, minStake);
+        await approveTx.wait();
+        
+        console.log('Token approval granted');
+        if (window.showToast) {
+          window.showToast('Token approval granted! Now registering provider...', 'success');
+        }
       }
 
       // Register with mock data (1TB storage, 1 wei per GB, mock node ID)
@@ -559,10 +821,35 @@ export default function DashboardPage() {
       console.error('Failed to register mock provider:', error);
       let errorMessage = error.message;
       
-      if (error.message.includes('Provider already registered')) {
+      if (error.message.includes('circuit breaker is open')) {
+        errorMessage = 'MetaMask circuit breaker is active. This usually happens after multiple failed requests. Please try the following:\n\n1. Wait 30-60 seconds for MetaMask to reset\n2. Refresh the page\n3. Disconnect and reconnect your wallet\n4. Restart your browser if the issue persists';
+        
+        // Show a more detailed toast with recovery instructions
+        if (window.showToast) {
+          window.showToast(errorMessage, 'warning', 10000); // Show for 10 seconds
+        }
+        
+        // Suggest alternative actions
+        console.log('Circuit breaker recovery suggestions:');
+        console.log('1. Wait 30-60 seconds before trying again');
+        console.log('2. Refresh the page to reset the connection');
+        console.log('3. Try disconnecting and reconnecting MetaMask');
+        
+        return; // Exit gracefully instead of throwing
+      } else if (error.message.includes('ECONNREFUSED') || error.message.includes('127.0.0.1:8545')) {
+        errorMessage = 'Cannot connect to local blockchain. Please ensure Hardhat node is running with: npx hardhat node';
+      } else if (error.message.includes('missing revert data') || error.message.includes('CALL_EXCEPTION')) {
+        errorMessage = 'Contract call failed. Please ensure you are connected to the correct network and contracts are deployed.';
+      } else if (error.message.includes('Provider already registered')) {
         errorMessage = 'Storage provider already registered for this account.';
       } else if (error.message.includes('Failed to stake tokens')) {
-        errorMessage = 'This contract requires staking tokens. Please use a different deployment or modify the contract.';
+        errorMessage = 'Insufficient token allowance or balance. Please ensure you have 1000 STOR tokens and approve the contract.';
+      } else if (error.message.includes('Insufficient STOR token balance')) {
+        errorMessage = 'You need 1000 STOR tokens to register as a storage provider.';
+      } else if (error.message.includes('execution reverted')) {
+        errorMessage = 'Transaction failed. Please ensure you have enough STOR tokens and gas fees.';
+      } else if (error.message.includes('Please switch to Hardhat Local network')) {
+        errorMessage = error.message; // Use the detailed network error message
       }
       
       if (window.showToast) {
