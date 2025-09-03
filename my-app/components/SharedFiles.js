@@ -7,7 +7,7 @@ import {
 } from '../utils/keyManagement';
 import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
 
-const SharedFiles = ({ account, contract }) => {
+const SharedFiles = ({ account, contract, onNotification }) => {
   const [sharedFiles, setSharedFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [accessibleFiles, setAccessibleFiles] = useState([]);
@@ -79,11 +79,19 @@ const SharedFiles = ({ account, contract }) => {
       );
       
       if (success) {
-        alert(`Shared file "${file.name}" downloaded successfully!`);
+        if (onNotification) {
+          onNotification(`Shared file "${file.name}" downloaded successfully!`, 'success');
+        } else {
+          console.log(`Shared file "${file.name}" downloaded successfully!`);
+        }
       }
     } catch (error) {
       console.error('Error downloading shared file:', error);
-      alert(`Error downloading shared file: ${error.message}`);
+      if (onNotification) {
+          onNotification(`Error downloading shared file: ${error.message}`, 'error');
+        } else {
+          console.error(`Error downloading shared file: ${error.message}`);
+        }
     } finally {
       setLoading(false);
     }
@@ -109,14 +117,26 @@ const SharedFiles = ({ account, contract }) => {
       });
       
       if (removedCount > 0) {
-        alert(`Removed ${removedCount} expired access token(s)`);
+        if (onNotification) {
+          onNotification(`Removed ${removedCount} expired access token(s)`, 'success');
+        } else {
+          console.log(`Removed ${removedCount} expired access token(s)`);
+        }
         loadSharedFiles(); // Refresh the list
       } else {
-        alert('No expired tokens found');
+        if (onNotification) {
+          onNotification('No expired tokens found', 'info');
+        } else {
+          console.log('No expired tokens found');
+        }
       }
     } catch (error) {
       console.error('Error removing expired tokens:', error);
-      alert('Error cleaning up expired tokens');
+      if (onNotification) {
+          onNotification('Error cleaning up expired tokens', 'error');
+        } else {
+          console.error('Error cleaning up expired tokens');
+        }
     }
   };
 
@@ -208,7 +228,11 @@ const SharedFiles = ({ account, contract }) => {
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(file.cid);
-                      alert('CID copied to clipboard!');
+                      if (onNotification) {
+        onNotification('CID copied to clipboard!', 'success');
+      } else {
+        console.log('CID copied to clipboard!');
+      }
                     }}
                     className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm"
                   >

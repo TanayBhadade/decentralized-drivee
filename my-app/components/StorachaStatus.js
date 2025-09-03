@@ -1,5 +1,6 @@
 import React from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import StorachaAuthService from '../utils/storachaAuth';
 
 const StorachaStatus = ({ 
   isReady, 
@@ -10,6 +11,46 @@ const StorachaStatus = ({
   onLogout 
 }) => {
   const [emailInput, setEmailInput] = useState(email || '');
+  const [realTimeConnectionStatus, setRealTimeConnectionStatus] = useState(false);
+  
+  // Real-time session validation
+  useEffect(() => {
+    const validateSession = () => {
+      if (!isReady) {
+        setRealTimeConnectionStatus(false);
+        return;
+      }
+      
+      const sessionValidation = StorachaAuthService.validateSessionIntegrity();
+      const isActuallyConnected = sessionValidation.isValid && isReady;
+      
+      setRealTimeConnectionStatus(isActuallyConnected);
+      
+      // Only trigger logout for actual session expiry, not other validation issues
+      if (!isActuallyConnected && isReady && sessionValidation.errorType === 'SESSION_EXPIRED') {
+        console.log('Session expired, triggering logout');
+        if (onLogout) {
+          onLogout();
+        }
+      } else if (!isActuallyConnected && isReady) {
+        if (sessionValidation.warningType === 'MISSING_SPACE') {
+          console.log('Session valid but space setup required:', sessionValidation.warning);
+          // This is just a warning - user is authenticated but needs to create/select a space
+        } else {
+          console.log('Session validation failed but not expired:', sessionValidation.error);
+          // Don't trigger logout for non-expiry issues, just update status
+        }
+      }
+    };
+    
+    // Validate immediately
+    validateSession();
+    
+    // Set up periodic validation every 30 seconds
+    const intervalId = setInterval(validateSession, 30000);
+    
+    return () => clearInterval(intervalId);
+  }, [isReady, onLogout]);
 
   const handleLogin = () => {
     if (emailInput.trim()) {
@@ -34,7 +75,7 @@ const StorachaStatus = ({
       );
     }
 
-    if (isReady) {
+    if (realTimeConnectionStatus) {
       return (
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2 text-green-400">
@@ -48,6 +89,16 @@ const StorachaStatus = ({
           >
             Disconnect
           </button>
+        </div>
+      );
+    }
+    
+    // Show disconnected state if session is invalid but isReady is still true
+    if (isReady && !realTimeConnectionStatus) {
+      return (
+        <div className="flex items-center space-x-2 text-red-400">
+          <div className="w-3 h-3 bg-red-400 rounded-full"></div>
+          <span className="text-sm font-medium">Not connected to Storacha</span>
         </div>
       );
     }
@@ -92,10 +143,10 @@ const StorachaStatus = ({
       <ErrorDisplay />
 
       {/* Login Form - Only show if not connected */}
-      {!isReady && (
+      {!realTimeConnectionStatus && (
         <div className="space-y-4">
           <p className="text-light-silver/70 text-sm">
-            Connect to Storacha for secure decentralized storage. You'll receive an email verification link.
+            Connect to Storacha for secure decentralized storage.
           </p>
           
           <div className="flex space-x-3">
@@ -126,21 +177,26 @@ const StorachaStatus = ({
           
           {/* Instructions */}
           <div className="bg-space-indigo/30 border border-electric-cyan/10 rounded-lg p-3">
-            <p className="text-light-silver/60 text-xs">
-              💡 <strong>How it works:</strong> Enter your email and click Connect. Check your email for a verification link, then return here to complete the connection.
+            <p className="text-xs text-light-silver/50 leading-relaxed">
+              💡 <strong>How it works:</strong> Enter your email and click Connect to establish a secure connection to Storacha.
             </p>
           </div>
         </div>
       )}
 
       {/* Connected State Info */}
-      {isReady && (
+      {realTimeConnectionStatus && (
         <div className="space-y-3">
           <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
             <div className="flex items-center space-x-2">
               <span className="text-green-400">✅</span>
               <span className="text-light-silver text-sm font-medium">Successfully connected to Storacha</span>
             </div>
+            {email && (
+              <p className="text-light-silver/70 text-xs mt-1">
+                Connected as: <span className="text-electric-cyan">{email}</span>
+              </p>
+            )}
             <p className="text-light-silver/60 text-xs mt-1">
               You can now upload files securely to the decentralized network.
             </p>

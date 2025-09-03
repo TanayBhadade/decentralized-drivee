@@ -18,7 +18,7 @@ import {
   PrinterIcon
 } from '@heroicons/react/24/outline';
 
-const AnalysisResults = ({ analysis, onClose }) => {
+const AnalysisResults = ({ analysis, onClose, onNotification }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [exportFormat, setExportFormat] = useState('json');
   
@@ -82,7 +82,11 @@ const AnalysisResults = ({ analysis, onClose }) => {
   const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(analysis, null, 2));
-      alert('Analysis results copied to clipboard!');
+      if (onNotification) {
+        onNotification('Analysis results copied to clipboard!', 'success');
+      } else {
+        console.log('Analysis results copied to clipboard!');
+      }
     } catch (err) {
       console.error('Failed to copy to clipboard:', err);
     }

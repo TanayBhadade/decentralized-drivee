@@ -75,7 +75,7 @@ export const useWallet = () => {
 
   const connectWallet = async () => {
     if (!isMetaMaskInstalled) {
-      alert("Please install MetaMask to use this app.");
+      console.error("MetaMask is not installed. Please install MetaMask to use this app.");
       return;
     }
     try {
@@ -88,7 +88,7 @@ export const useWallet = () => {
       setIsLoading(false);
     } catch (error) {
       console.error("Error connecting to MetaMask:", error);
-      alert("Failed to connect wallet. Please try again.");
+      console.error("Failed to connect wallet. Please try again.");
       setIsLoading(false);
     }
   };

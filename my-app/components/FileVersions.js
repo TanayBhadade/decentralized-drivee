@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import CryptoJS from 'crypto-js';
 import { downloadWithIntegrityCheck } from '../utils/fileIntegrity.js';
 
-const FileVersions = ({ file, contract, account, encryptionKey, onClose }) => {
+const FileVersions = ({ file, contract, account, encryptionKey, onClose, onNotification }) => {
   const [versions, setVersions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [downloadingVersion, setDownloadingVersion] = useState(null);
@@ -63,7 +63,11 @@ const FileVersions = ({ file, contract, account, encryptionKey, onClose }) => {
 
   const handleDownloadVersion = async (version) => {
     if (!encryptionKey) {
-      alert('Please enter the encryption key to download and decrypt the file.');
+      if (onNotification) {
+        onNotification('Please enter the encryption key to download and decrypt the file.', 'warning');
+      } else {
+        console.warn('Please enter the encryption key to download and decrypt the file.');
+      }
       return;
     }
 
@@ -79,11 +83,19 @@ const FileVersions = ({ file, contract, account, encryptionKey, onClose }) => {
       });
       
       if (success) {
-        alert(`Version ${version.id + 1} downloaded successfully with integrity verification!`);
+        if (onNotification) {
+          onNotification(`Version ${version.id + 1} downloaded successfully with integrity verification!`, 'success');
+        } else {
+          console.log(`Version ${version.id + 1} downloaded successfully with integrity verification!`);
+        }
       }
     } catch (error) {
       console.error('Error downloading version:', error);
-      alert(`Error downloading version: ${error.message}`);
+      if (onNotification) {
+        onNotification(`Error downloading version: ${error.message}`, 'error');
+      } else {
+        console.error(`Error downloading version: ${error.message}`);
+      }
     } finally {
       setDownloadingVersion(null);
     }

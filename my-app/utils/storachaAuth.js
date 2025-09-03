@@ -119,9 +119,9 @@ export class StorachaAuthService {
       }
 
       // Validate input parameters
-      if (!email || !spaceDid) {
+      if (!email) {
         throw new StorachaAuthError(
-          'Email and space DID are required',
+          'Email is required',
           StorachaAuthErrors.INVALID_SESSION_DATA
         );
       }
@@ -169,10 +169,8 @@ export class StorachaAuthService {
     try {
       // Check if localStorage is available
       if (typeof Storage === 'undefined' || !localStorage) {
-        throw new StorachaAuthError(
-          'Local storage is not available',
-          StorachaAuthErrors.STORAGE_NOT_AVAILABLE
-        );
+        console.warn('Local storage is not available');
+        return null; // Don't throw error, just return null
       }
 
       const encryptedSessionData = localStorage.getItem(this.SESSION_KEY);
@@ -185,23 +183,19 @@ export class StorachaAuthService {
         // Decrypt session data
         parsedSession = this.decryptData(encryptedSessionData);
       } catch (decryptError) {
-        // If decryption fails, clear the corrupted session
+        // If decryption fails, clear the corrupted session but don't throw
+        console.warn('Session decryption failed, clearing session:', decryptError.message);
         this.clearSession();
-        throw new StorachaAuthError(
-          'Session data is corrupted or tampered with',
-          StorachaAuthErrors.SESSION_CORRUPTED
-        );
+        return null;
       }
 
       // Check if session has expired
       if (parsedSession.timestamp) {
         const sessionAge = Date.now() - parsedSession.timestamp;
         if (sessionAge > SESSION_EXPIRY_MS) {
+          console.log('Session has expired, clearing session');
           this.clearSession();
-          throw new StorachaAuthError(
-            'Session has expired',
-            StorachaAuthErrors.SESSION_EXPIRED
-          );
+          return null; // Don't throw error, just return null
         }
       }
 
@@ -213,17 +207,9 @@ export class StorachaAuthService {
         isValid: true
       };
     } catch (error) {
-      if (error instanceof StorachaAuthError) {
-        throw error;
-      }
-      
       console.error('Failed to retrieve Storacha session:', error);
-      this.clearSession();
-      throw new StorachaAuthError(
-        'Failed to retrieve session from storage',
-        StorachaAuthErrors.STORAGE_NOT_AVAILABLE,
-        error
-      );
+      // Don't clear session on unexpected errors, just return null
+      return null;
     }
   }
 
@@ -319,9 +305,18 @@ export class StorachaAuthService {
           errorType: 'NO_SESSION'
         };
       }
+      
+      // If session exists but is not marked as valid, it means there was an issue
+      if (!session.isValid) {
+        return {
+          isValid: false,
+          error: 'Session is not valid',
+          errorType: 'INVALID_SESSION'
+        };
+      }
 
-      // Check required fields
-      const requiredFields = ['email', 'spaceDid', 'timestamp'];
+      // Check required fields - spaceDid is optional if user is authenticated but hasn't created/selected a space yet
+      const requiredFields = ['email', 'timestamp'];
       const missingFields = requiredFields.filter(field => !session[field]);
       
       if (missingFields.length > 0) {
@@ -330,6 +325,20 @@ export class StorachaAuthService {
           error: `Missing required fields: ${missingFields.join(', ')}`,
           errorType: 'MISSING_FIELDS',
           missingFields
+        };
+      }
+      
+      // Check if spaceDid is missing (this is a warning, not an error)
+      if (!session.spaceDid) {
+        const sessionAge = Date.now() - session.timestamp;
+        return {
+          isValid: true,
+          session,
+          sessionAge,
+          timeUntilExpiry: SESSION_EXPIRY_MS - sessionAge,
+          warning: 'Space DID not found - user may need to create or select a space',
+          warningType: 'MISSING_SPACE',
+          requiresSpaceSetup: true
         };
       }
 
@@ -401,6 +410,24 @@ export class StorachaAuthService {
         shouldWarn: false,
         expired: true,
         error: validation.error
+      };
+    }
+
+    // Handle case where session is valid but has warnings (like MISSING_SPACE)
+    if (validation.warning) {
+      const timeUntilExpiry = validation.timeUntilExpiry;
+      const shouldWarn = timeUntilExpiry <= warningThresholdMs;
+      
+      return {
+        shouldWarn,
+        expired: false,
+        timeUntilExpiry,
+        warningThreshold: warningThresholdMs,
+        expiresAt: new Date(validation.session.timestamp + SESSION_EXPIRY_MS),
+        warning: validation.warning,
+        message: shouldWarn 
+          ? `Session will expire in ${Math.round(timeUntilExpiry / (60 * 1000))} minutes`
+          : null
       };
     }
 

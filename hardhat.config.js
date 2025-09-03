@@ -8,6 +8,11 @@ const { NEXT_PUBLIC_AMOY_RPC_URL, PRIVATE_KEY } = process.env;
 module.exports = {
   solidity: "0.8.24",
   networks: {
+    // Local Hardhat network for development
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31337
+    },
     // This section defines the 'amoy' network
     amoy: {
       url: NEXT_PUBLIC_AMOY_RPC_URL,

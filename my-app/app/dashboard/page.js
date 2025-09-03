@@ -89,6 +89,7 @@ export default function DashboardPage() {
   const [storachaEmail, setStorachaEmail] = useState('');
   const [isStorachaLoading, setIsStorachaLoading] = useState(false);
   const [storachaSpace, setStorachaSpace] = useState(null);
+  const [userAccount, setUserAccount] = useState(null); // Store authenticated user account
   const [authError, setAuthError] = useState(null);
   
   // STOR token economy states
@@ -106,26 +107,98 @@ export default function DashboardPage() {
         const client = await create();
         setStorachaClient(client);
         
-        // Check for existing session
+        // First, check for existing session using client.login() without email
+        // This is the proper way to check for session persistence according to Storacha docs
+        try {
+          console.log('Checking for existing Storacha session...');
+          const account = await client.login(); // No email parameter - checks for existing session
+          
+          if (account) {
+            console.log('Found existing authenticated session:', account.did());
+            setUserAccount(account);
+            
+            // Try to restore space from local storage
+            const existingSession = StorachaAuthService.getSession();
+            if (existingSession && existingSession.email && existingSession.sessionData?.space) {
+              const space = existingSession.sessionData.space;
+              try {
+                await client.setCurrentSpace(space.did || space.toString());
+                setStorachaSpace(space);
+                setStorachaEmail(existingSession.email);
+                setIsStorachaReady(true);
+                setAuthError(null);
+                
+                console.log('Session fully restored with space:', space.did || space.toString());
+                if (window.showToast) {
+                  window.showToast('Welcome back! Your Storacha session has been restored.', 'success');
+                }
+                return;
+              } catch (spaceError) {
+                console.warn('Failed to restore space, but account is authenticated:', spaceError);
+              }
+            }
+            
+            // Account is authenticated but no space - save session and set ready state
+            const email = existingSession?.email || account.did();
+            try {
+              StorachaAuthService.saveSession(email, null, { loginTimestamp: Date.now() });
+            } catch (saveError) {
+              console.warn('Failed to save session without space:', saveError.message);
+            }
+            
+            setStorachaEmail(email);
+            setIsStorachaReady(true);
+            setAuthError(null);
+            
+            console.log('Session restored, but space needs to be created or selected');
+            if (window.showToast) {
+              window.showToast('Session restored. Please create or select a space to continue.', 'info');
+            }
+            return;
+          }
+        } catch (loginError) {
+          console.log('No existing session found or session invalid:', loginError.message);
+          // No existing session, continue to check local storage for fallback
+        }
+        
+        // Fallback: Check local storage for session data (legacy support)
         try {
           const existingSession = StorachaAuthService.getSession();
-          if (existingSession) {
-            console.log('Restoring Storacha session for:', existingSession.email);
-            setStorachaEmail(existingSession.email);
-            setIsStorachaReady(true);
+          if (existingSession && existingSession.email) {
+            console.log('Found local session data for:', existingSession.email);
             
-            // Validate session by attempting to use the client
-            try {
-              // If we have session data with space info, restore it
-              if (existingSession.sessionData && existingSession.sessionData.space) {
-                setStorachaSpace(existingSession.sessionData.space);
-              }
-            } catch (error) {
-              console.warn('Session validation failed, clearing session:', error);
+            // Validate session integrity
+            const sessionValidation = StorachaAuthService.validateSessionIntegrity();
+            if (!sessionValidation.isValid) {
+              console.log('Local session validation failed:', sessionValidation.error);
               StorachaAuthService.clearSession();
               setIsStorachaReady(false);
-              setStorachaEmail('');
+              return;
             }
+            
+            // Try to restore authentication using stored email (legacy fallback)
+            try {
+              console.log('Attempting to restore session with stored email...');
+              const account = await client.login(existingSession.email);
+              
+              if (account) {
+                setUserAccount(account);
+                setStorachaEmail(existingSession.email);
+                setIsStorachaReady(true);
+                setAuthError(null);
+                
+                console.log('Session restored via email login');
+                if (window.showToast) {
+                  window.showToast('Session restored. Please create or select a space.', 'info');
+                }
+                return;
+              }
+            } catch (restoreError) {
+              console.log('Failed to restore session with stored email:', restoreError.message);
+              StorachaAuthService.clearSession();
+            }
+          } else {
+            console.log('No local session data found');
           }
         } catch (error) {
           // Handle specific authentication errors
@@ -171,6 +244,7 @@ export default function DashboardPage() {
         setIsStorachaReady(false);
         setStorachaEmail('');
         setStorachaSpace(null);
+        setUserAccount(null); // Clear user account
         setAuthError(null);
         console.log('Storacha logout successful');
         
@@ -237,12 +311,17 @@ export default function DashboardPage() {
       return () => clearInterval(intervalId);
     }, [isStorachaReady]);
 
-  // Redirect to login if not connected
+  // Redirect to login if not connected (but only if Storacha is also not ready)
   useEffect(() => {
-    if (isClient && isInitialized && !account) {
-      router.push('/auth/login');
+    if (isClient && isInitialized && !account && !isStorachaReady) {
+      // Add a small delay to prevent conflicts with session validation
+      const timeoutId = setTimeout(() => {
+        router.push('/auth/login');
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
     }
-  }, [account, isClient, router, isInitialized]);
+  }, [account, isClient, router, isInitialized, isStorachaReady]);
 
   // Load files effect - moved before early return
   useEffect(() => {
@@ -366,14 +445,24 @@ export default function DashboardPage() {
         console.log('Session check failed, proceeding with new login:', sessionError.message);
       }
       
-      await storachaClient.login(email);
+      const account = await storachaClient.login(email);
+      console.log('Storacha login successful, account:', account.did());
       
-      // Wait for email verification (in real implementation, this would be handled differently)
-      alert('Please check your email and click the verification link. Click OK after verification.');
+      // Store the authenticated user account
+      setUserAccount(account);
       
-      // Create a space for the user
-      const space = await storachaClient.createSpace('my-decentralized-drive');
+      // After login, claim the delegation to authorize the agent
+      console.log('Claiming delegation after email verification...');
+      await storachaClient.capability.access.claim();
+      console.log('Delegation claimed successfully');
+      
+      // Create a space for the user with proper authorization proof
+      const space = await storachaClient.createSpace('my-decentralized-drive', { account });
       console.log('Storacha space created:', space);
+      
+      // Set the space as current for the client (createSpace automatically adds it)
+      await storachaClient.setCurrentSpace(space.did());
+      console.log('Storacha space set as current:', space.did());
       
       // Save session data
       const sessionData = {
@@ -427,16 +516,75 @@ export default function DashboardPage() {
      }
    };
 
-  const handleUpload = async () => {
-    if (!selectedFile || !encryptionKey) {
-      alert("Please select a file and enter an encryption key.");
+  // Register a mock storage provider for development
+  const registerMockProvider = async () => {
+    if (!contract || !account) {
+      if (window.showToast) {
+        window.showToast('Please connect your wallet first.', 'warning');
+      }
       return;
     }
 
-    if (!isStorachaReady) {
-      alert("Please login to Storacha first.");
-      return;
+    try {
+      console.log('Registering mock storage provider...');
+      
+      // Check if provider is already registered
+      try {
+        const providerInfo = await contract.getProviderInfo(account);
+        if (providerInfo.isActive) {
+          if (window.showToast) {
+            window.showToast('Storage provider already registered for this account.', 'info');
+          }
+          return;
+        }
+      } catch (error) {
+        // Provider not registered yet, continue with registration
+      }
+
+      // Register with mock data (1TB storage, 1 wei per GB, mock node ID)
+      const tx = await contract.registerProvider(
+        1000000000000, // 1TB in bytes
+        1, // 1 wei per GB (very cheap for development)
+        'mock-node-id-' + Date.now(),
+        'development'
+      );
+      
+      await tx.wait();
+      
+      console.log('Mock storage provider registered successfully');
+      if (window.showToast) {
+        window.showToast('Mock storage provider registered successfully! You can now upload files.', 'success');
+      }
+    } catch (error) {
+      console.error('Failed to register mock provider:', error);
+      let errorMessage = error.message;
+      
+      if (error.message.includes('Provider already registered')) {
+        errorMessage = 'Storage provider already registered for this account.';
+      } else if (error.message.includes('Failed to stake tokens')) {
+        errorMessage = 'This contract requires staking tokens. Please use a different deployment or modify the contract.';
+      }
+      
+      if (window.showToast) {
+        window.showToast(`Failed to register provider: ${errorMessage}`, 'error');
+      }
     }
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile || !encryptionKey) {
+          if (window.showToast) {
+            window.showToast('Please select a file and enter an encryption key.', 'warning');
+          }
+          return;
+        }
+        
+        if (!isStorachaReady) {
+          if (window.showToast) {
+            window.showToast('Please login to Storacha first.', 'warning');
+          }
+          return;
+        }
 
     const reader = new FileReader();
     reader.onloadend = async () => {
@@ -448,7 +596,14 @@ export default function DashboardPage() {
         const file = new File([blob], selectedFile.name, { type: 'text/plain' });
 
         console.log('Uploading to Storacha...');
-        const cid = await storachaClient.uploadFile(file);
+        
+        // Ensure we have an authenticated space for uploading
+        if (!storachaSpace) {
+          throw new Error('No Storacha space available. Please reconnect to Storacha.');
+        }
+        
+        // Use the authenticated space context for uploading
+        const cid = await storachaSpace.uploadFile(file);
         console.log('Storacha upload successful, CID:', cid);
         const fileId = `${Date.now()}_${selectedFile.name}`;
         
@@ -465,7 +620,9 @@ export default function DashboardPage() {
         );
         await tx.wait();
         console.log('File uploaded successfully to blockchain');
-        alert('File uploaded successfully!');
+        if (window.showToast) {
+          window.showToast('File uploaded successfully!', 'success');
+        }
         
         // Reload files after upload using the correct method
         const totalFiles = await contract.getTotalFiles();
@@ -496,7 +653,9 @@ export default function DashboardPage() {
 
       } catch (error) {
         console.error('Error uploading file:', error);
-        alert(`File upload failed: ${error.message}`);
+        if (window.showToast) {
+          window.showToast(`File upload failed: ${error.message}`, 'error');
+        }
       }
     };
     reader.readAsDataURL(selectedFile);
@@ -505,7 +664,9 @@ export default function DashboardPage() {
   const handleShareFile = (file) => {
     // Check if user has enough STOR tokens for premium sharing
     if (storBalance < 50) {
-      alert('Insufficient STOR balance. You need 50 STOR tokens to share files. Please buy more STOR tokens.');
+      if (window.showToast) {
+          window.showToast('Insufficient STOR balance. You need 50 STOR tokens to share files. Please buy more STOR tokens.', 'warning');
+        }
       setShowBuyStorModal(true);
       return;
     }
@@ -517,13 +678,17 @@ export default function DashboardPage() {
     
     // Show success message
     setTimeout(() => {
-      alert('50 STOR tokens deducted for premium file sharing!');
+      if (window.showToast) {
+          window.showToast('50 STOR tokens deducted for premium file sharing!', 'success');
+        }
     }, 500);
   };
 
   const handleDedicatedShare = () => {
     if (!selectedFileForDedicatedSharing) {
-      alert('Please select a file to share first.');
+      if (window.showToast) {
+        window.showToast('Please select a file to share first.', 'warning');
+      }
       return;
     }
     
@@ -559,12 +724,16 @@ export default function DashboardPage() {
     // Simulate buying STOR tokens
     setStorBalance(prev => prev + amount);
     setShowBuyStorModal(false);
-    alert(`Successfully purchased ${amount} STOR tokens!`);
+    if (window.showToast) {
+      window.showToast(`Successfully purchased ${amount} STOR tokens!`, 'success');
+    }
   };
 
   const handleDownload = async (file) => {
     if (!encryptionKey) {
-        alert("Please enter the encryption key to download and decrypt the file.");
+        if (window.showToast) {
+          window.showToast('Please enter the encryption key to download and decrypt the file.', 'warning');
+        }
         return;
     }
     try {
@@ -575,17 +744,23 @@ export default function DashboardPage() {
         // });
         
         // Temporary simple download notification
-        alert('File download initiated for: ' + file.name);
+        if (window.showToast) {
+          window.showToast('File download initiated for: ' + file.name, 'info');
+        }
         console.log('Downloading file:', file.cid, file.name);
     } catch(error) {
         console.error("Error downloading or decrypting file:", error);
-        alert("Failed to download or decrypt. Is the key correct?");
+        if (window.showToast) {
+          window.showToast('Failed to download or decrypt. Is the key correct?', 'error');
+        }
     }
   };
 
   const handleAnalyzeFile = async (file) => {
     if (!encryptionKey) {
-      alert("Please enter the encryption key to decrypt and analyze the file.");
+      if (window.showToast) {
+        window.showToast('Please enter the encryption key to decrypt and analyze the file.', 'warning');
+      }
       return;
     }
 
@@ -636,7 +811,9 @@ export default function DashboardPage() {
       
     } catch (error) {
       console.error('Error analyzing file:', error);
-      alert(`Failed to analyze file: ${error.message}`);
+      if (window.showToast) {
+        window.showToast(`Failed to analyze file: ${error.message}`, 'error');
+      }
     } finally {
       setIsAnalyzing(false);
       setAnalysisProgress(0);
@@ -894,7 +1071,15 @@ export default function DashboardPage() {
               </div>
               )
             ) : (
-              <SharedFiles account={account} contract={contract} />
+              <SharedFiles 
+                account={account} 
+                contract={contract} 
+                onNotification={(message, type) => {
+                  if (window.showToast) {
+                    window.showToast(message, type);
+                  }
+                }}
+              />
             )}
           </div>
         );
@@ -916,6 +1101,22 @@ export default function DashboardPage() {
               onLogin={handleStorachaLogin}
               onLogout={handleStorachaLogout}
             />
+            
+            {/* Storage Provider Setup for Development */}
+            <div className="bg-dark-navy/50 border border-electric-blue/20 rounded-lg p-6">
+              <h3 className="text-light-silver font-semibold mb-2">Development Setup</h3>
+              <p className="text-light-silver/60 text-sm mb-4">
+                For development purposes, you need to register a storage provider before uploading files.
+              </p>
+              <button
+                onClick={registerMockProvider}
+                disabled={!account || !contract}
+                className="bg-electric-blue hover:bg-electric-blue/80 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors duration-200"
+              >
+                Register Mock Storage Provider
+              </button>
+            </div>
+            
             <UploadCenter 
                account={account}
                onUpload={async (files, options) => {
@@ -946,8 +1147,19 @@ export default function DashboardPage() {
                            
                            console.log(`Uploading ${fileData.name} to Storacha...`);
                            const file = new File([blob], fileData.name, { type: 'text/plain' });
-                           const cid = await storachaClient.uploadFile(file);
-                           console.log(`Storacha upload successful for ${fileData.name}, CID:`, cid);
+                           
+                           // Use the authenticated space for upload
+                           if (!storachaSpace) {
+                             throw new Error('No Storacha space available. Please reconnect to Storacha.');
+                           }
+                           
+                           // Ensure the space is set as current before uploading
+                           await storachaClient.setCurrentSpace(storachaSpace.did());
+                           const cidResult = await storachaClient.uploadFile(file);
+                           console.log(`Storacha upload successful for ${fileData.name}, CID:`, cidResult);
+                           
+                           // Extract the actual CID string from the result object
+                           const cid = cidResult.toString();
                            const fileId = `${Date.now()}_${fileData.name}`;
                            
                            console.log(`Uploading ${fileData.name} to blockchain...`);
@@ -976,7 +1188,16 @@ export default function DashboardPage() {
                      
                    } catch (error) {
                      console.error(`Error uploading ${fileData.name}:`, error);
-                     alert(`Failed to upload ${fileData.name}: ${error.message}`);
+                     let errorMessage = error.message;
+                     
+                     // Handle specific contract errors
+                     if (error.message.includes('Not enough active providers')) {
+                       errorMessage = 'No storage providers available. Please register a storage provider first or try again later.';
+                     }
+                     
+                     if (window.showToast) {
+                       window.showToast(`Failed to upload ${fileData.name}: ${errorMessage}`, 'error');
+                     }
                    }
                  }
                  
@@ -1006,7 +1227,7 @@ export default function DashboardPage() {
                    }
                    
                    setFiles(loadedFiles);
-                   alert('All files uploaded successfully!');
+                   // Files loaded from blockchain
                  } catch (error) {
                    console.error('Error reloading files:', error);
                  }
@@ -1111,15 +1332,25 @@ export default function DashboardPage() {
           account={account}
           encryptionKey={encryptionKey}
           onClose={closeVersionsModal}
+          onNotification={(message, type) => {
+            if (window.showToast) {
+              window.showToast(message, type);
+            }
+          }}
         />
       )}
 
       {showAnalysisResults && analysisData && (
         <AnalysisResults
-          analysisData={analysisData}
+          analysis={analysisData}
           onClose={() => {
             setShowAnalysisResults(false);
             setAnalysisData(null);
+          }}
+          onNotification={(message, type) => {
+            if (window.showToast) {
+              window.showToast(message, type);
+            }
           }}
         />
       )}
